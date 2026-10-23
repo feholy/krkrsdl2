@@ -1,0 +1,50 @@
+name: Build muOS ARM64 (glibc 2.31)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build inside Debian bullseye container (glibc 2.31)
+        run: |
+          docker run --rm -v "$PWD":/src -w /src debian:bullseye bash -c "
+            set -e
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              build-essential cmake ninja-build git curl ca-certificates
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake --build build
+          "
+
+      - name: Verify binary and glibc/GLIBCXX requirements
+        run: |
+          file build/krkrsdl2
+          echo '--- GLIBC symbols ---'
+          readelf --version-info build/krkrsdl2 | grep -o 'GLIBC_[0-9.]*' | sort -uV
+          echo '--- GLIBCXX symbols ---'
+          readelf --version-info build/krkrsdl2 | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -3
+          MAXGLIBC=$(readelf --version-info build/krkrsdl2 | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          echo "Max GLIBC symbol required: $MAXGLIBC"
+          if [ "$(printf '%s\n' "2.31" "$MAXGLIBC" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" != "2.31" ]; then
+            echo "::error::Binary requires GLIBC newer than 2.31 (found $MAXGLIBC). Not compatible with muOS."
+            exit 1
+          fi
+
+      - name: Archive binary
+        run: tar -C build -czf krkrsdl2-muos-arm64.tar.gz krkrsdl2
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: krkrsdl2-muos-arm64
+          path: krkrsdl2-muos-arm64.tar.gz
